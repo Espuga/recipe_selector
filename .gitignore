@@ -3,3 +3,6 @@
 /.zencoder
 /.zenflow
 /recipe_chooser.drawio
+__pycache__
+.env
+feedback.jsonl
