@@ -1,64 +1,64 @@
 # AGENTS.md
 
-## Visió general del projecte
-Aquest repositori és una demo de selecció de receptes amb embeddings. Carrega receptes des de MongoDB, genera embeddings amb `sentence-transformers`, classifica un prompt en català i aprèn del feedback per recalcular centroides de receptes.
+## Project overview
+This repository is a recipe selection demo using embeddings. It loads recipes from MongoDB, generates embeddings with `sentence-transformers`, classifies a Catalan prompt, and learns from feedback to recalculate recipe centroids.
 
-## Estructura de carpetes i fitxers
+## Folder and file structure
 
-### Arrel del repositori
-- `main.py`: punt d'entrada CLI. Carrega receptes, calcula embeddings, fa prediccions i recull feedback per recalcular centroides.
-- `README.md`: descripció mínima del projecte.
-- `requirements.txt`: dependències Python (`pymongo`, `sentence-transformers`, `numpy`).
-- `.env.example`: variables d'entorn esperades.
-- `documentation/recipe_chooser.drawio`: diagrama del flux (fitxer Draw.io).
+### Repository root
+- `main.py`: CLI entry point. Loads recipes, computes embeddings, makes predictions, and collects feedback to recalculate centroids.
+- `README.md`: project overview and usage.
+- `requirements.txt`: Python dependencies (`pymongo`, `sentence-transformers`, `numpy`).
+- `.env.example`: expected environment variables.
+- `documentation/recipe_chooser.drawio`: flow diagram (Draw.io file).
 
 ### `app/`
-Paquet principal del projecte.
+Main project package.
 
 #### `app/models/`
-- `recipe.py`: dataclass `Recipe` amb `id`, `name`, `description` i `base_text()`.
+- `recipe.py`: `Recipe` dataclass with `id`, `name`, `description`, and `base_text()`.
 
 #### `app/services/`
-- `recipes.py`: lògica de domini per carregar receptes de MongoDB, rankejar i predir receptes amb probabilitats.
+- `recipes.py`: domain logic to load recipes from MongoDB, rank, and predict recipes with probabilities.
 
 #### `app/core/`
-- `mongodb_connector.py`: connector senzill a MongoDB (`MongoClient`) i selecció de base de dades.
+- `mongodb_connector.py`: simple MongoDB connector (`MongoClient`) and database selection.
 
 #### `app/stores/`
-- `feedback_store.py`: persistència de feedback en format JSONL (append i lectura).
+- `feedback_store.py`: feedback persistence in JSONL format (append and read).
 
 #### `app/utils/`
-- `texts.py`: helpers per generar embeddings normalitzats.
-- `embeddings.py`: cosine similarity (amb embeddings normalitzats), softmax amb temperatura i càlcul de centroides a partir de feedback.
+- `texts.py`: helpers to generate normalized embeddings.
+- `embeddings.py`: cosine similarity (with normalized embeddings), temperature softmax, and centroid computation from feedback.
 
-## Flux principal de dades
-1. `main.py` carrega receptes de MongoDB (`recipes` collection).
-2. Genera embeddings base amb `SentenceTransformer`.
-3. Calcula centroides per recepta amb feedback acceptat/corregit.
-4. Classifica el prompt amb similarity i mostra top resultats.
-5. Desa feedback en `feedback.jsonl` (configurable) i recalcula centroides.
+## Main data flow
+1. `main.py` loads recipes from MongoDB (`recipes` collection).
+2. Generates base embeddings with `SentenceTransformer`.
+3. Computes centroids per recipe using accepted/corrected feedback.
+4. Classifies the prompt with similarity and shows top results.
+5. Saves feedback to `feedback.jsonl` (configurable) and recalculates centroids.
 
-## Variables d'entorn i configuració
-- `EMBEDDING_MODEL_NAME`: model de `sentence-transformers`.
-- `FEEDBACK_PATH`: ruta del fitxer JSONL de feedback.
+## Environment variables and configuration
+- `EMBEDDING_MODEL_NAME`: `sentence-transformers` model.
+- `FEEDBACK_PATH`: path to the feedback JSONL file.
 
-Consulta `.env.example` per valors per defecte.
+See `.env.example` for defaults.
 
-## Dependències
-Instal·la amb:
+## Dependencies
+Install with:
 ```
 pip install -r requirements.txt
 ```
 
-## Requisits d'execució
-- MongoDB accessible (per defecte a `mongodb://localhost:27017`).
-- Col·lecció `recipes` dins la base de dades `recipes` amb documents que tinguin `name` i `description`.
+## Runtime requirements
+- MongoDB accessible (default `mongodb://localhost:27017`).
+- `recipes` collection inside the `recipes` database with documents that include `name` and `description`.
 
-## Execució
+## Run
 ```
 python main.py
 ```
 
-## Notes per contribuir
-- El projecte és una demo CLI; no hi ha tests automatitzats inclosos.
-- El feedback s'acumula en JSONL i s'utilitza per aprendre centroides.
+## Notes for contributors
+- This is a CLI demo; no automated tests are included.
+- Feedback is appended to JSONL and used to learn centroids.
