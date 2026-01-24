@@ -1,73 +1,141 @@
-import numpy as np
-from typing import List
+from typing import Any, Dict, List, Optional
 from sentence_transformers import SentenceTransformer
-from app.models.recipe import Recipe
+import uuid
+from qdrant_client.http import models as qm
+from bson import ObjectId
+
+from app.core.qdrant_connector import QdrantConnector
 from app.core.mongodb_connector import MongoDBConnector
-from app.utils.texts import embed_texts
-from app.utils.embeddings import cosine_sim, softmax
+from app.utils.texts import embed_text
+from app.utils.embeddings import  softmax
+from app.utils.qdrant import build_filter_app_or_generic
+from app.models.recipe import Recipe
 
-def load_recipes_from_mongo() -> List[Recipe]:
-  mongo_connector = MongoDBConnector()
-  recipes_collection = mongo_connector.db["recipes"]
 
-  docs = list(recipes_collection.find({}))
-  recipes: List[Recipe] = []
+mongodb_connector = MongoDBConnector()
+qdrant_connector = QdrantConnector()
 
-  for d in docs:
-    recipes.append(
-      Recipe(
-        id=str(d["_id"]),
-        name=d.get("name", "").strip(),
-        description=d.get("description", "").strip()
+
+def get_recipe_by_id(recipe_id: str) -> Recipe:
+  recipes_collection = mongodb_connector.db["recipes"]
+  recipe = recipes_collection.find_one({"_id": ObjectId(recipe_id)})
+  recipe["id"] = str(recipe["_id"])
+  del recipe["_id"]
+  recipe["app_id"] = str(recipe["app_id"])
+  return Recipe(**recipe)
+
+def add_recipe_to_qdrant(
+  model: SentenceTransformer,
+  recipe_id: str,
+  name: str,
+  description: str,
+  app_id: Optional[str]
+) -> str:
+
+  point_id = str(uuid.uuid4())  # Qdrant point id (UUID)
+  base_text = f"{name}. {description}".strip()
+  vector = embed_text(model, base_text)
+
+  payload: Dict[str, Any] = {
+    "recipe_id": recipe_id,  # mandatory
+    "name": name,
+    "description": description
+  }
+  if app_id:
+    payload["app_id"] = app_id
+
+  qdrant_connector.client.upsert(
+    collection_name=qdrant_connector.COLLECTION_NAME,
+    points=[
+      qm.PointStruct(
+        id=point_id,
+        vector=vector,
+        payload=payload
       )
-    )
-
-  if not recipes:
-    raise RuntimeError("No s'han trobat receptes a Mongo. Inserta almenys 1 recepta a la collection 'recipes'.")
-
-  return recipes
-
-
-def rank_recipes(
-  prompt: str,
-  recipes: List[Recipe],
-  recipe_vecs: np.ndarray,
-  model: SentenceTransformer,
-  top_k: int = 5
-) -> List[tuple]:
-  prompt_vec = embed_texts(model, [prompt])[0]  # shape (384,)
-  scored = []
-
-  for i, r in enumerate(recipes):
-    score = cosine_sim(prompt_vec, recipe_vecs[i])
-    scored.append((r, score))
-
-  scored.sort(key=lambda x: x[1], reverse=True)
-  return scored[:max(1, min(top_k, len(scored)))]
-
-def predict_recipes(
-  prompt: str,
-  recipes: List[Recipe],
-  recipe_vecs: np.ndarray,
-  model: SentenceTransformer,
-  top_k: int = 5,
-  temperature: float = 0.2
-) -> List[tuple]:
-  ranked = rank_recipes(
-    prompt=prompt,
-    recipes=recipes,
-    recipe_vecs=recipe_vecs,
-    model=model,
-    top_k=top_k
+    ]
   )
 
-  scores = [score for _, score in ranked]
+  return point_id
+
+
+def find_point_ids_by_recipe_id(recipe_id: str, limit: int = 100) -> List[str]:
+
+  flt = qm.Filter(
+    must=[
+      qm.FieldCondition(
+        key="recipe_id",
+        match=qm.MatchValue(value=recipe_id)
+      )
+    ]
+  )
+
+  point_ids: List[str] = []
+  offset = None
+
+  # Scroll pages until we collect all matches (up to limit per page)
+  while True:
+    points, next_offset = qdrant_connector.client.scroll(
+      collection_name=qdrant_connector.COLLECTION_NAME,
+      scroll_filter=flt,
+      limit=min(100, limit),
+      offset=offset,
+      with_payload=False,
+      with_vectors=False
+    )
+
+    for p in points:
+      point_ids.append(str(p.id))
+
+    if not next_offset or len(point_ids) >= limit:
+      break
+
+    offset = next_offset
+
+  return point_ids[:limit]
+
+
+def delete_recipe_by_recipe_id_qdrant(recipe_id: str) -> int:
+
+  point_ids = find_point_ids_by_recipe_id(recipe_id, limit=1000)
+  if not point_ids:
+    return 0
+
+  qdrant_connector.client.delete(
+    collection_name=qdrant_connector.COLLECTION_NAME,
+    points_selector=qm.PointIdsList(points=point_ids)
+  )
+  return len(point_ids)
+
+
+def search_recipes(
+  model: SentenceTransformer,
+  prompt: str,
+  top_k: int,
+  app_id: Optional[str],
+  temperature: float = 0.2
+) -> List[Dict[str, Any]]:
+
+  query_vec = embed_text(model, prompt)
+
+  query_filter = None
+  if app_id:
+    query_filter = build_filter_app_or_generic(app_id)
+
+  results = qdrant_connector.client.query_points(
+    collection_name=qdrant_connector.COLLECTION_NAME,
+    query=query_vec,
+    limit=top_k,
+    query_filter=query_filter,
+    with_payload=True
+  ).points
+
+  scores = [r.score for r in results]
   probs = softmax(scores, temperature=temperature)
 
-  # Retornem tuples: (Recipe, score, prob)
   enriched = []
-  for i, (r, score) in enumerate(ranked):
+  for i, r in enumerate(results):
     prob = probs[i] if i < len(probs) else 0.0
-    enriched.append((r, score, prob))
+    payload = r.payload or {}
+    enriched.append((payload.get("recipe_id"), r.score, prob))
 
   return enriched
