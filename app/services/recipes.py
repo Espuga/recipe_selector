@@ -139,3 +139,21 @@ def search_recipes(
     enriched.append((payload.get("recipe_id"), r.score, prob))
 
   return enriched
+
+
+def add_recipe_feedback(
+  predicted_recipe_id: str,
+  prompt: str,
+  status: str,
+  final_recipe_id: str = None,
+):
+  if final_recipe_id is None:
+    final_recipe_id = predicted_recipe_id
+
+  use_recipes_feedback_collection = mongodb_connector.db["use_recipes_feedback"]
+  use_recipes_feedback_collection.insert_one({
+    "predicted_recipe_id": ObjectId(predicted_recipe_id),
+    "prompt": prompt,
+    "status": status,
+    "final_recipe_id": ObjectId(final_recipe_id)
+  })
