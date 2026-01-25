@@ -4,7 +4,7 @@ from typing import List
 from sentence_transformers import SentenceTransformer
 
 
-VECTOR_SIZE = os.getenv("VECTOR_SIZE", 384)
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 384))
 
 
 def embed_text(model: SentenceTransformer, text: str) -> List[float]:
