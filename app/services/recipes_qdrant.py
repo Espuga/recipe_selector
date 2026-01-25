@@ -9,7 +9,6 @@ from app.core.qdrant_connector import QdrantConnector
 from app.core.mongodb_connector import MongoDBConnector
 from app.utils.texts import embed_text
 from app.models.recipe import Recipe
-from app.services.recipes import find_point_ids_by_recipe_id, add_recipe_to_qdrant
 
 
 mongodb_connector = MongoDBConnector()
@@ -19,18 +18,99 @@ qdrant_connector = QdrantConnector()
 recipes_collection = mongodb_connector.db["recipes"]
 
 
-def __update_recipe_vector_from_feedback(
+def add_recipe_to_qdrant(
+  model: SentenceTransformer,
+  recipe_id: str,
+  name: str,
+  description: str,
+  app_id: Optional[str]
+) -> str:
+
+  point_id = str(uuid.uuid4())  # Qdrant point id (UUID)
+  base_text = f"{name}. {description}".strip()
+  vector = embed_text(model, base_text)
+
+  payload: Dict[str, Any] = {
+    "recipe_id": recipe_id,  # mandatory
+    "name": name,
+    "description": description
+  }
+  if app_id:
+    payload["app_id"] = app_id
+
+  qdrant_connector.client.upsert(
+    collection_name=qdrant_connector.COLLECTION_NAME,
+    points=[
+      qm.PointStruct(
+        id=point_id,
+        vector=vector,
+        payload=payload
+      )
+    ]
+  )
+
+  return point_id
+
+
+def find_point_ids_by_recipe_id(recipe_id: str, limit: int = 100) -> List[str]:
+
+  flt = qm.Filter(
+    must=[
+      qm.FieldCondition(
+        key="recipe_id",
+        match=qm.MatchValue(value=recipe_id)
+      )
+    ]
+  )
+
+  point_ids: List[str] = []
+  offset = None
+
+  # Scroll pages until we collect all matches (up to limit per page)
+  while True:
+    points, next_offset = qdrant_connector.client.scroll(
+      collection_name=qdrant_connector.COLLECTION_NAME,
+      scroll_filter=flt,
+      limit=min(100, limit),
+      offset=offset,
+      with_payload=False,
+      with_vectors=False
+    )
+
+    for p in points:
+      point_ids.append(str(p.id))
+
+    if not next_offset or len(point_ids) >= limit:
+      break
+
+    offset = next_offset
+
+  return point_ids[:limit]
+
+
+def delete_recipe_by_recipe_id_qdrant(recipe_id: str) -> int:
+
+  point_ids = find_point_ids_by_recipe_id(recipe_id, limit=1000)
+  if not point_ids:
+    return 0
+
+  qdrant_connector.client.delete(
+    collection_name=qdrant_connector.COLLECTION_NAME,
+    points_selector=qm.PointIdsList(points=point_ids)
+  )
+  return len(point_ids)
+
+
+def update_recipe_vector_from_feedback(
   model: SentenceTransformer,
   recipe: Recipe,
   max_prompts: int = 50,
   base_weight: float = 10.0
 ) -> None:
   print("Updating recipe vector...")
-  print(f"Recipe name: {recipe.name}")
 
   # 1) Base vector (name + description)
   base_text = f"{recipe.name}. {recipe.description}".strip()
-  print(f"Base text: {base_text}")
   base_vec = np.array(embed_text(model, base_text), dtype=np.float32)
 
   # 2) Agafa els últims N prompts positius de Mongo
@@ -46,9 +126,6 @@ def __update_recipe_vector_from_feedback(
 
   prompts = [doc.get("prompt", "").strip() for doc in cursor if doc.get("prompt")]
   prompts = [p for p in prompts if p]
-  print("Prompts")
-  for p in prompts:
-    print(f"- {p}")
 
   # 3) Embeddings dels prompts
   if prompts:
@@ -143,7 +220,7 @@ def sync_recipe_by_id(
   # - crea point a Qdrant si no existeix
   # - fa upsert del vector/payload
   # - elimina duplicats
-  __update_recipe_vector_from_feedback(
+  update_recipe_vector_from_feedback(
     model=model,
     recipe=recipe,
     max_prompts=max_prompts,
